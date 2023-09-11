@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import DefaultDict, Dict, Set, cast
 
+from ipdb import set_trace
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application.current import get_app
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory, Suggestion
@@ -63,17 +64,26 @@ class SyntaxCompletion:
     created_at: datetime = datetime.utcnow()
 
 
-class MentatCompleter(Completer):
+class CommandCompleter(Completer):
+    def __init__(self):
+        self.completer = WordCompleter(
+            words=Command.get_command_completions(),
+            ignore_case=True,
+            sentence=True,
+        )
+
+    def get_completions(self, document, complete_event):
+        command_completions = self.completer.get_completions(document, complete_event)
+        for completion in command_completions:
+            yield completion
+
+
+class SyntaxCompleter(Completer):
     def __init__(self, code_context: CodeContext):
         self.code_context = code_context
 
         self.syntax_completions: Dict[Path, SyntaxCompletion] = dict()
         self.file_name_completions: DefaultDict[str, Set[Path]] = defaultdict(set)
-        self.command_completer = WordCompleter(
-            words=Command.get_command_completions(),
-            ignore_case=True,
-            sentence=True,
-        )
 
         self._all_syntax_words: Set[str]
         self._last_refresh_at: datetime
@@ -135,22 +145,9 @@ class MentatCompleter(Completer):
         self._last_refresh_at = datetime.utcnow()
 
     def get_completions(self, document: Document, complete_event: CompleteEvent):
-        if document.text_before_cursor == "":
-            return
         if (datetime.utcnow() - self._last_refresh_at).seconds > 5:
             self.refresh_completions()
-        if (
-            document.text_before_cursor[0] == "/"
-            and not document.text_before_cursor[-1].isspace()
-        ):
-            command_completions = self.command_completer.get_completions(
-                document, complete_event
-            )
-            for completion in command_completions:
-                yield completion
 
-        if document.text_before_cursor[-1] == " ":
-            return
         document_words = document.text_before_cursor.split()
         if not document_words:
             return
@@ -179,6 +176,20 @@ class MentatCompleter(Completer):
                         start_position=-len(last_word),
                         display=completion,
                     )
+
+
+class MentatCompleter(Completer):
+    def __init__(self, code_context: CodeContext):
+        self.command_completer = CommandCompleter()
+        self.syntax_completer = SyntaxCompleter(code_context)
+
+    def get_completions(self, document: Document, complete_event: CompleteEvent):
+        if document.text_before_cursor == "" or document.text_before_cursor[-1] == " ":
+            return []
+        if document.text_before_cursor[0] == "/":
+            return self.command_completer.get_completions(document, complete_event)
+        else:
+            return self.syntax_completer.get_completions(document, complete_event)
 
 
 class MentatPromptSession(PromptSession):
